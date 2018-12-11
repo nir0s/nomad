@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"syscall"
 	"time"
@@ -100,19 +101,42 @@ func (c *grpcExecutorClient) Version() (*ExecutorVersion, error) {
 	return &ExecutorVersion{Version: resp.Version}, nil
 }
 
-func (c *grpcExecutorClient) Stats() (*cstructs.TaskResourceUsage, error) {
-	ctx := context.Background()
-	resp, err := c.client.Stats(ctx, &proto.StatsRequest{})
+func (c *grpcExecutorClient) Stats(ctx context.Context, interval time.Duration) (<-chan *cstructs.TaskResourceUsage, error) {
+	stream, err := c.client.Stats(ctx, &proto.StatsRequest{})
 	if err != nil {
 		return nil, err
 	}
 
-	stats, err := drivers.TaskStatsFromProto(resp.Stats)
-	if err != nil {
-		return nil, err
-	}
-	return stats, nil
+	ch := make(chan *cstructs.TaskResourceUsage)
+	go c.handleStats(ctx, stream, ch)
+	return ch, nil
+}
 
+func (c *grpcExecutorClient) handleStats(ctx context.Context, stream proto.Executor_StatsClient, ch chan *cstructs.TaskResourceUsage) {
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			if err != io.EOF {
+				// XXX handle error
+				continue
+			}
+
+			// End stream
+			return
+		}
+
+		stats, err := drivers.TaskStatsFromProto(resp.Stats)
+		if err != nil {
+			// XXX handle error
+			continue
+		}
+
+		select {
+		case ch <- stats:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (c *grpcExecutorClient) Signal(s os.Signal) error {
