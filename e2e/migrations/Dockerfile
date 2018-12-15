@@ -5,8 +5,7 @@ RUN apt-get update -y
 RUN apt-get install -y \
     build-essential \
     git \
-    golang \
-    liblxc1
+    golang
 
 ENV GOPATH=$HOME/gopkg
 ENV PATH=$PATH:$GOPATH/bin:/usr/local/lib
