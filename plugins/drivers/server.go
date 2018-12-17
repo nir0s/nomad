@@ -224,22 +224,27 @@ func (b *driverPluginServer) InspectTask(ctx context.Context, req *proto.Inspect
 	return resp, nil
 }
 
-func (b *driverPluginServer) TaskStats(ctx context.Context, req *proto.TaskStatsRequest) (*proto.TaskStatsResponse, error) {
-	stats, err := b.impl.TaskStats(req.TaskId)
+func (b *driverPluginServer) TaskStats(req *proto.TaskStatsRequest, srv proto.Driver_TaskStatsServer) error {
+	ch, err := b.impl.TaskStats(srv.Context(), req.TaskId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	pb, err := TaskStatsToProto(stats)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode task stats: %v", err)
+	for stats := range ch {
+		pb, err := TaskStatsToProto(stats)
+		if err != nil {
+			return fmt.Errorf("failed to encode task stats: %v", err)
+		}
+
+		if err = srv.Send(&proto.TaskStatsResponse{Stats: pb}); err == io.EOF {
+			break
+		} else if err != nil {
+			return err
+		}
+
 	}
 
-	resp := &proto.TaskStatsResponse{
-		Stats: pb,
-	}
-
-	return resp, nil
+	return nil
 }
 
 func (b *driverPluginServer) ExecTask(ctx context.Context, req *proto.ExecTaskRequest) (*proto.ExecTaskResponse, error) {

@@ -35,7 +35,7 @@ type DriverPlugin interface {
 	StopTask(taskID string, timeout time.Duration, signal string) error
 	DestroyTask(taskID string, force bool) error
 	InspectTask(taskID string) (*TaskStatus, error)
-	TaskStats(taskID string) (*cstructs.TaskResourceUsage, error)
+	TaskStats(ctx context.Context, taskID string) (<-chan *cstructs.TaskResourceUsage, error)
 	TaskEvents(context.Context) (<-chan *TaskEvent, error)
 
 	SignalTask(taskID string, signal string) error

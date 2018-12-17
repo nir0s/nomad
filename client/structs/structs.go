@@ -231,6 +231,9 @@ type TaskResourceUsage struct {
 	ResourceUsage *ResourceUsage
 	Timestamp     int64
 	Pids          map[string]*ResourceUsage
+
+	// Err is set by the driver if an error occured during an RPC stream
+	Err error
 }
 
 // AllocResourceUsage holds the aggregated task resource usage of the

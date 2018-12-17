@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -257,20 +258,45 @@ func (d *driverPluginClient) InspectTask(taskID string) (*TaskStatus, error) {
 }
 
 // TaskStats returns resource usage statistics for the task
-func (d *driverPluginClient) TaskStats(taskID string) (*cstructs.TaskResourceUsage, error) {
+func (d *driverPluginClient) TaskStats(ctx context.Context, taskID string) (<-chan *cstructs.TaskResourceUsage, error) {
 	req := &proto.TaskStatsRequest{TaskId: taskID}
-
-	resp, err := d.client.TaskStats(d.doneCtx, req)
+	ctx, _ = joincontext.Join(ctx, d.doneCtx)
+	stream, err := d.client.TaskStats(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	stats, err := TaskStatsFromProto(resp.Stats)
-	if err != nil {
-		return nil, err
-	}
+	ch := make(chan *cstructs.TaskResourceUsage, 1)
+	d.handleStats(ctx, ch, stream)
 
-	return stats, nil
+	return ch, nil
+}
+
+func (d *driverPluginClient) handleStats(ctx context.Context, ch chan *cstructs.TaskResourceUsage, stream proto.Driver_TaskStatsClient) {
+	defer close(ch)
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			if err != io.EOF {
+				d.logger.Error("error recieving stream from TaskStats driver RPC", "error", err)
+				ch <- &cstructs.TaskResourceUsage{
+					Err: shared.HandleStreamErr(err, ctx, d.doneCtx),
+				}
+			}
+
+			// End of stream
+			return
+		}
+
+		stats, err := TaskStatsFromProto(resp.Stats)
+		if err != nil {
+			ch <- &cstructs.TaskResourceUsage{
+				Err: fmt.Errorf("failed to decode stats from RPC: %v", err),
+			}
+		}
+
+		ch <- stats
+	}
 }
 
 // TaskEvents returns a channel that will receive events from the driver about all
