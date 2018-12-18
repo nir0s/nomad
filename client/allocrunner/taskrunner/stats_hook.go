@@ -2,7 +2,6 @@ package taskrunner
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +21,8 @@ type statsHook struct {
 	updater  StatsUpdater
 	interval time.Duration
 
-	// stopCh is closed by Exited or Canceled
-	stopCh chan struct{}
+	// cancel is called by Exited or Canceled
+	cancel context.CancelFunc
 
 	mu sync.Mutex
 
@@ -48,13 +47,14 @@ func (h *statsHook) Poststart(ctx context.Context, req *interfaces.TaskPoststart
 	defer h.mu.Unlock()
 
 	// This shouldn't happen, but better safe than risk leaking a goroutine
-	if h.stopCh != nil {
+	if h.cancel != nil {
 		h.logger.Debug("poststart called twice without exiting between")
-		close(h.stopCh)
+		h.cancel()
 	}
 
-	h.stopCh = make(chan struct{})
-	go h.collectResourceUsageStats(req.DriverStats, h.stopCh)
+	ctx, cancel := context.WithCancel(ctx)
+	h.cancel = cancel
+	go h.collectResourceUsageStats(ctx, req.DriverStats)
 
 	return nil
 }
@@ -63,56 +63,50 @@ func (h *statsHook) Exited(context.Context, *interfaces.TaskExitedRequest, *inte
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.stopCh == nil {
+	if h.cancel == nil {
 		// No stats running
 		return nil
 	}
 
-	// Close chan to stop stats collection
-	close(h.stopCh)
+	// Call cancel to stop stats collection
+	h.cancel()
 
-	// Clear chan so we don't double close for any reason
-	h.stopCh = nil
+	// Clear cancel func so we don't double call for any reason
+	h.cancel = nil
 
 	return nil
 }
 
 // collectResourceUsageStats starts collecting resource usage stats of a Task.
 // Collection ends when the passed channel is closed
-func (h *statsHook) collectResourceUsageStats(handle interfaces.DriverStats, stopCh <-chan struct{}) {
-	// start collecting the stats right away and then start collecting every
-	// collection interval
-	next := time.NewTimer(0)
-	defer next.Stop()
+func (h *statsHook) collectResourceUsageStats(ctx context.Context, handle interfaces.DriverStats) {
+
 	for {
+		ch, err := handle.Stats(ctx)
+		if err != nil {
+			// Check if the driver doesn't implement stats
+			if err.Error() == cstructs.DriverStatsNotImplemented.Error() {
+				h.logger.Debug("driver does not support stats")
+				return
+			}
+
+			continue
+		}
+
 		select {
-		case <-next.C:
-			// Reset the timer
-			next.Reset(h.interval)
+		case ru, ok := <-ch:
+			if !ok {
+				// Channel closed
+			}
 
-			// Collect stats from driver
-			ru, err := handle.Stats()
-			if err != nil {
-				// Check if the driver doesn't implement stats
-				if err.Error() == cstructs.DriverStatsNotImplemented.Error() {
-					h.logger.Debug("driver does not support stats")
-					return
-				}
-
-				//XXX This is a net/rpc specific error
-				// We do not log when the plugin is shutdown as this is simply a
-				// race between the stopCollection channel being closed and calling
-				// Stats on the handle.
-				if !strings.Contains(err.Error(), "connection is shut down") {
-					h.logger.Debug("error fetching stats of task", "error", err)
-				}
-
-				continue
+			if ru.Err != nil {
+				// log err
 			}
 
 			// Update stats on TaskRunner and emit them
 			h.updater.UpdateStats(ru)
-		case <-stopCh:
+
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -122,14 +116,9 @@ func (h *statsHook) Shutdown() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.stopCh == nil {
+	if h.cancel == nil {
 		return
 	}
 
-	select {
-	case <-h.stopCh:
-		// Already closed
-	default:
-		close(h.stopCh)
-	}
+	h.cancel()
 }

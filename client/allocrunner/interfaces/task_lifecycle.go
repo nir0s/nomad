@@ -88,7 +88,7 @@ type TaskPrestartHook interface {
 
 // DriverStats is the interface implemented by DriverHandles to return task stats.
 type DriverStats interface {
-	Stats() (*cstructs.TaskResourceUsage, error)
+	Stats(context.Context) (<-chan *cstructs.TaskResourceUsage, error)
 }
 
 type TaskPoststartRequest struct {
