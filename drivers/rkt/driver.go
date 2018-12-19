@@ -193,6 +193,9 @@ type Driver struct {
 
 	// logger will log to the Nomad agent
 	logger hclog.Logger
+
+	// hasFingerprinted is used to store whether we have fingerprinted before
+	hasFingerprinted bool
 }
 
 func NewRktDriver(logger hclog.Logger) drivers.DriverPlugin {
@@ -262,6 +265,10 @@ func (d *Driver) handleFingerprint(ctx context.Context, ch chan *drivers.Fingerp
 }
 
 func (d *Driver) buildFingerprint() *drivers.Fingerprint {
+	defer func() {
+		d.hasFingerprinted = true
+	}()
+
 	fingerprint := &drivers.Fingerprint{
 		Attributes:        map[string]*pstructs.Attribute{},
 		Health:            drivers.HealthStateHealthy,
@@ -270,7 +277,9 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 
 	// Only enable if we are root
 	if syscall.Geteuid() != 0 {
-		d.logger.Debug("must run as root user, disabling")
+		if !d.hasFingerprinted {
+			d.logger.Debug("must run as root user, disabling")
+		}
 		fingerprint.Health = drivers.HealthStateUndetected
 		fingerprint.HealthDescription = drivers.DriverRequiresRootMessage
 		return fingerprint
@@ -298,8 +307,10 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 		// Do not allow ancient rkt versions
 		fingerprint.Health = drivers.HealthStateUndetected
 		fingerprint.HealthDescription = fmt.Sprintf("unsuported rkt version %s", currentVersion)
-		d.logger.Warn("unsupported rkt version please upgrade to >= "+minVersion.String(),
-			"rkt_version", currentVersion)
+		if !d.hasFingerprinted {
+			d.logger.Warn("unsupported rkt version please upgrade to >= "+minVersion.String(),
+				"rkt_version", currentVersion)
+		}
 		return fingerprint
 	}
 
