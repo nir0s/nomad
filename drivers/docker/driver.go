@@ -147,7 +147,6 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	}
 
 	d.tasks.Set(handle.Config.ID, h)
-	go h.collectStats()
 	go h.run()
 
 	return nil
@@ -291,7 +290,6 @@ CREATE:
 	}
 
 	d.tasks.Set(cfg.ID, h)
-	go h.collectStats()
 	go h.run()
 
 	return handle, net, nil
@@ -1088,13 +1086,13 @@ func (d *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
 	return status, nil
 }
 
-func (d *Driver) TaskStats(taskID string) (*structs.TaskResourceUsage, error) {
+func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *structs.TaskResourceUsage, error) {
 	h, ok := d.tasks.Get(taskID)
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
 	}
 
-	return h.Stats()
+	return h.Stats(ctx, interval)
 }
 
 func (d *Driver) TaskEvents(ctx context.Context) (<-chan *drivers.TaskEvent, error) {

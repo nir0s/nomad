@@ -231,6 +231,9 @@ message TaskStatsRequest {
 
     // TaskId is the ID of the target task
     string task_id = 1;
+
+    // Interval is the interval in nanosecond at which to stream stats to the caller
+    int64 interval = 2;
 }
 
 message TaskStatsResponse {

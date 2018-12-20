@@ -460,7 +460,7 @@ func (d *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
 	panic("not implemented")
 }
 
-func (d *Driver) TaskStats(taskID string) (*cstructs.TaskResourceUsage, error) {
+func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *cstructs.TaskResourceUsage, error) {
 	//TODO return an error?
 	return nil, nil
 }

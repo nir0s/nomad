@@ -161,14 +161,10 @@ func (h *taskHandle) Kill(killTimeout time.Duration, signal os.Signal) error {
 	return nil
 }
 
-func (h *taskHandle) Stats() (*cstructs.TaskResourceUsage, error) {
-	h.resourceUsageLock.RLock()
-	defer h.resourceUsageLock.RUnlock()
-	var err error
-	if h.resourceUsage == nil {
-		err = fmt.Errorf("stats collection hasn't started yet")
-	}
-	return h.resourceUsage, err
+func (h *taskHandle) Stats(ctx context.Context, interval time.Duration) (<-chan *cstructs.TaskResourceUsage, error) {
+	ch := make(chan *cstructs.TaskResourceUsage, 1)
+	go h.collectStats(ctx, ch, interval)
+	return ch, nil
 }
 
 func (h *taskHandle) run() {
@@ -226,7 +222,7 @@ func (h *taskHandle) run() {
 }
 
 // collectStats starts collecting resource usage stats of a docker container
-func (h *taskHandle) collectStats() {
+func (h *taskHandle) collectStats(ctx context.Context, ch chan *cstructs.TaskResourceUsage, interval time.Duration) {
 
 	statsCh := make(chan *docker.Stats)
 	statsOpts := docker.StatsOptions{ID: h.containerID, Done: h.doneCh, Stats: statsCh, Stream: true}
@@ -236,50 +232,78 @@ func (h *taskHandle) collectStats() {
 			h.logger.Debug("error collecting stats from container", "error", err)
 		}
 	}()
-	numCores := runtime.NumCPU()
-	for {
+	h.logger.Trace("starting stats collection")
+	var resourceUsage *cstructs.TaskResourceUsage
+	// Initial stats population
+	for resourceUsage == nil {
 		select {
 		case s := <-statsCh:
 			if s != nil {
-				ms := &cstructs.MemoryStats{
-					RSS:      s.MemoryStats.Stats.Rss,
-					Cache:    s.MemoryStats.Stats.Cache,
-					Swap:     s.MemoryStats.Stats.Swap,
-					MaxUsage: s.MemoryStats.MaxUsage,
-					Measured: DockerMeasuredMemStats,
-				}
-
-				cs := &cstructs.CpuStats{
-					ThrottledPeriods: s.CPUStats.ThrottlingData.ThrottledPeriods,
-					ThrottledTime:    s.CPUStats.ThrottlingData.ThrottledTime,
-					Measured:         DockerMeasuredCpuStats,
-				}
-
-				// Calculate percentage
-				cs.Percent = calculatePercent(
-					s.CPUStats.CPUUsage.TotalUsage, s.PreCPUStats.CPUUsage.TotalUsage,
-					s.CPUStats.SystemCPUUsage, s.PreCPUStats.SystemCPUUsage, numCores)
-				cs.SystemMode = calculatePercent(
-					s.CPUStats.CPUUsage.UsageInKernelmode, s.PreCPUStats.CPUUsage.UsageInKernelmode,
-					s.CPUStats.CPUUsage.TotalUsage, s.PreCPUStats.CPUUsage.TotalUsage, numCores)
-				cs.UserMode = calculatePercent(
-					s.CPUStats.CPUUsage.UsageInUsermode, s.PreCPUStats.CPUUsage.UsageInUsermode,
-					s.CPUStats.CPUUsage.TotalUsage, s.PreCPUStats.CPUUsage.TotalUsage, numCores)
-				cs.TotalTicks = (cs.Percent / 100) * stats.TotalTicksAvailable() / float64(numCores)
-
-				h.resourceUsageLock.Lock()
-				h.resourceUsage = &cstructs.TaskResourceUsage{
-					ResourceUsage: &cstructs.ResourceUsage{
-						MemoryStats: ms,
-						CpuStats:    cs,
-					},
-					Timestamp: s.Read.UTC().UnixNano(),
-				}
-				h.resourceUsageLock.Unlock()
+				resourceUsage = dockerStatsToTaskResourceUsage(s)
 			}
 		case <-h.doneCh:
 			return
+		case <-ctx.Done():
+			return
 		}
+	}
+
+	// Main stats loop
+	timer := time.NewTimer(0)
+	for {
+		select {
+		case <-timer.C:
+			select {
+			case ch <- resourceUsage:
+			default:
+				// Backpressure caused missed interval
+			}
+			timer.Reset(interval)
+		case s := <-statsCh:
+			if s != nil {
+				resourceUsage = dockerStatsToTaskResourceUsage(s)
+			}
+		case <-h.doneCh:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func dockerStatsToTaskResourceUsage(s *docker.Stats) *cstructs.TaskResourceUsage {
+	ms := &cstructs.MemoryStats{
+		RSS:      s.MemoryStats.Stats.Rss,
+		Cache:    s.MemoryStats.Stats.Cache,
+		Swap:     s.MemoryStats.Stats.Swap,
+		MaxUsage: s.MemoryStats.MaxUsage,
+		Measured: DockerMeasuredMemStats,
+	}
+
+	cs := &cstructs.CpuStats{
+		ThrottledPeriods: s.CPUStats.ThrottlingData.ThrottledPeriods,
+		ThrottledTime:    s.CPUStats.ThrottlingData.ThrottledTime,
+		Measured:         DockerMeasuredCpuStats,
+	}
+
+	// Calculate percentage
+	cs.Percent = calculatePercent(
+		s.CPUStats.CPUUsage.TotalUsage, s.PreCPUStats.CPUUsage.TotalUsage,
+		s.CPUStats.SystemCPUUsage, s.PreCPUStats.SystemCPUUsage, runtime.NumCPU())
+	cs.SystemMode = calculatePercent(
+		s.CPUStats.CPUUsage.UsageInKernelmode, s.PreCPUStats.CPUUsage.UsageInKernelmode,
+		s.CPUStats.CPUUsage.TotalUsage, s.PreCPUStats.CPUUsage.TotalUsage, runtime.NumCPU())
+	cs.UserMode = calculatePercent(
+		s.CPUStats.CPUUsage.UsageInUsermode, s.PreCPUStats.CPUUsage.UsageInUsermode,
+		s.CPUStats.CPUUsage.TotalUsage, s.PreCPUStats.CPUUsage.TotalUsage, runtime.NumCPU())
+	cs.TotalTicks = (cs.Percent / 100) * stats.TotalTicksAvailable() / float64(runtime.NumCPU())
+
+	return &cstructs.TaskResourceUsage{
+		ResourceUsage: &cstructs.ResourceUsage{
+			MemoryStats: ms,
+			CpuStats:    cs,
+		},
+		Timestamp: s.Read.UTC().UnixNano(),
 	}
 }
 

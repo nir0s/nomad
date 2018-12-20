@@ -3,6 +3,7 @@ package drivers
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/golang/protobuf/ptypes"
 	hclog "github.com/hashicorp/go-hclog"
@@ -225,7 +226,7 @@ func (b *driverPluginServer) InspectTask(ctx context.Context, req *proto.Inspect
 }
 
 func (b *driverPluginServer) TaskStats(req *proto.TaskStatsRequest, srv proto.Driver_TaskStatsServer) error {
-	ch, err := b.impl.TaskStats(srv.Context(), req.TaskId)
+	ch, err := b.impl.TaskStats(srv.Context(), req.TaskId, time.Duration(req.Interval))
 	if err != nil {
 		return err
 	}

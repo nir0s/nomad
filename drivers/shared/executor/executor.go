@@ -67,7 +67,7 @@ type Executor interface {
 	// Version returns the executor API version
 	Version() (*ExecutorVersion, error)
 
-	// Returns a channel ofReturns a channel of stats. Stats are collected and
+	// Returns a channel of stats. Stats are collected and
 	// pushed to the channel on the given interval
 	Stats(context.Context, time.Duration) (<-chan *cstructs.TaskResourceUsage, error)
 

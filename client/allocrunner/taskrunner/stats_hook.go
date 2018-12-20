@@ -81,33 +81,40 @@ func (h *statsHook) Exited(context.Context, *interfaces.TaskExitedRequest, *inte
 // Collection ends when the passed channel is closed
 func (h *statsHook) collectResourceUsageStats(ctx context.Context, handle interfaces.DriverStats) {
 
-	for {
-		ch, err := handle.Stats(ctx)
-		if err != nil {
-			// Check if the driver doesn't implement stats
-			if err.Error() == cstructs.DriverStatsNotImplemented.Error() {
-				h.logger.Debug("driver does not support stats")
-				return
-			}
-
-			continue
+	ch, err := handle.Stats(ctx, h.interval)
+	if err != nil {
+		// Check if the driver doesn't implement stats
+		if err.Error() == cstructs.DriverStatsNotImplemented.Error() {
+			h.logger.Debug("driver does not support stats")
+			return
 		}
+		h.logger.Error("failed to start stats collection for task", "error", err)
+	}
 
+	for {
 		select {
 		case ru, ok := <-ch:
 			if !ok {
-				// Channel closed
+				ch, err = handle.Stats(ctx, h.interval)
+				if err != nil {
+					h.logger.Warn("stats collection for task failed", "error", err)
+					return
+				}
 			}
 
 			if ru.Err != nil {
-				// log err
+				h.logger.Warn("stats collection for task failed", "error", err)
 			}
 
 			// Update stats on TaskRunner and emit them
 			h.updater.UpdateStats(ru)
 
-		case <-ctx.Done():
-			return
+		default:
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 	}
 }

@@ -493,13 +493,38 @@ func (d *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
 	return handle.TaskStatus(), nil
 }
 
-func (d *Driver) TaskStats(taskID string) (*cstructs.TaskResourceUsage, error) {
+func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *cstructs.TaskResourceUsage, error) {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
 	}
 
-	return handle.stats()
+	ch := make(chan *cstructs.TaskResourceUsage, 1)
+	go d.handleStats(ctx, ch, interval, handle)
+
+	return ch, nil
+}
+
+func (d *Driver) handleStats(ctx context.Context, ch chan *cstructs.TaskResourceUsage, interval time.Duration, h *taskHandle) {
+	timer := time.NewTimer(0)
+	for {
+		select {
+		case <-timer.C:
+			stats, err := h.stats()
+			if err != nil {
+				d.logger.Warn("failed to collect stats for container", "error", err)
+			} else {
+				select {
+				case ch <- h.stats():
+				default:
+					// Missed interval due to backpressure
+				}
+			}
+			timer.Reset(interval)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (d *Driver) TaskEvents(ctx context.Context) (<-chan *drivers.TaskEvent, error) {
