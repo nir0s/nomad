@@ -499,3 +499,7 @@ func (d *Driver) GetTaskConfig() (*drivers.TaskConfig, *TaskConfig) {
 	defer d.lastMu.Unlock()
 	return d.lastDriverTaskConfig, d.lastTaskConfig
 }
+
+func (d *Driver) Shutdown() {
+	d.signalShutdown()
+}
